@@ -106,6 +106,7 @@ def submit_payment(opaque_value: str, month: str, year: str, amount: str, proxy:
 
     response = requests.post(url, headers=headers, files={k: (None, v) for k, v in form_data.items()}, proxies=proxy, timeout=30)
     
+    # Directly return the raw response for debugging
     return response.text
 
 @app.route('/submit_payment', methods=['GET'])
@@ -141,21 +142,11 @@ def api_submit_payment():
         opaque = get_opaque_data(card, month, year, cvv, proxy)
         raw_response = submit_payment(opaque, month, year, f"{amount:.2f}", proxy)
 
-        # Clean and parse the response
-        response_data = json.loads(raw_response)
-        success = response_data.get('success', False)
-
-        if success:
-            message = "Your Payment is Successfully Done."
-        else:
-            # Extract error details, if available
-            error_details = response_data.get('data', {}).get('errors', {}).get('general', {}).get('footer', '')
-            message = error_details.replace("<div>", "").replace("</div>", "").strip() if error_details else "An error occurred."
-
+        # Return the raw response directly for debugging
         return jsonify({
             "charged_amount": f"${amount:.2f}",
-            "message": message,
-            "success": success
+            "raw_response": raw_response,
+            "success": True
         }), 200
 
     except Exception as e:
