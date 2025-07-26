@@ -50,8 +50,11 @@ def get_opaque_data(card_number: str, exp_month: str, exp_year: str, card_cvv: s
         }
     }
 
-    r = requests.post(url, headers=headers, json=payload, proxies=proxy, timeout=30)
-    data = json.loads(r.content.decode('utf-8-sig'))
+    response = requests.post(url, headers=headers, json=payload, proxies=proxy, timeout=30)
+    data = json.loads(response.content.decode('utf-8-sig'))
+
+    # Debugging: Print the response from the payment processor
+    print("Opaque Data Response:", data)
 
     if data.get("messages", {}).get("resultCode") == "Ok":
         return data["opaqueData"]["dataValue"]
@@ -142,7 +145,7 @@ def api_submit_payment():
         opaque = get_opaque_data(card, month, year, cvv, proxy)
         raw_response = submit_payment(opaque, month, year, f"{amount:.2f}", proxy)
 
-        # Directly return the raw response for debugging
+        # Return the raw response directly for debugging
         return jsonify({
             "charged_amount": f"${amount:.2f}",
             "raw_response": raw_response,
