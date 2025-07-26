@@ -103,20 +103,26 @@ def submit_payment(opaque_value: str, month: str, year: str, amount: str, proxy:
     }
 
     response = requests.post(url, headers=headers, files={k: (None, v) for k, v in form_data.items()}, proxies=proxy, timeout=30)
+    
+    # Return the raw response text for debugging
     return response.text
 
 @app.route('/submit_payment', methods=['GET'])
 def api_submit_payment():
     # Extract parameters from the query string
     card = request.args.get('cc')
-    proxy = {
-        "http": request.args.get('proxy_http'),
-        "https": request.args.get('proxy_https')
-    }
-    amount = request.args.get('amount', DEFAULT_AMOUNT)
     month = request.args.get('month')
     year = request.args.get('year')
     cvv = request.args.get('cvv')
+    amount = request.args.get('amount', DEFAULT_AMOUNT)
+    
+    # Extract proxy parameters
+    proxy_http = request.args.get('proxy_http')
+    proxy_https = request.args.get('proxy_https')
+    proxy = {
+        "http": proxy_http,
+        "https": proxy_https
+    }
 
     if not all([card, month, year, cvv]):
         return jsonify({"error": "Missing required parameters"}), 400
@@ -125,15 +131,16 @@ def api_submit_payment():
         opaque = get_opaque_data(card, month, year, cvv, proxy)
         raw_response = submit_payment(opaque, month, year, amount, proxy)
 
-        # Clean the response
+        # Clean and parse the response
         response_data = json.loads(raw_response)
         success = response_data.get('success', False)
 
         if success:
             message = "Your Payment is Successfully Done."
         else:
+            # Extract error details, if available
             error_details = response_data.get('data', {}).get('errors', {}).get('general', {}).get('footer', '')
-            message = error_details.replace("<div>", "").replace("</div>", "").strip()
+            message = error_details.replace("<div>", "").replace("</div>", "").strip() if error_details else "An error occurred."
 
         return jsonify({
             "charged_amount": f"${amount}",
