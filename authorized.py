@@ -3,7 +3,7 @@ import requests
 import json
 import uuid
 from faker import Faker
-from fake_useragent import UserAgent
+from fake_useragent import UserAgent, FakeUserAgentError
 
 app = Flask(__name__)
 
@@ -11,14 +11,16 @@ app = Flask(__name__)
 MERCHANT_NAME = "3c5Q9QdJW"
 CLIENT_KEY = "2n7ph2Zb4HBkJkb8byLFm7stgbfd8k83mSPWLW23uF4g97rX5pRJNgbyAe2vAvQu"
 DEFAULT_AMOUNT = "0.10"
+MINIMUM_AMOUNT = 0.01  # Minimum amount
+MAXIMUM_AMOUNT = 100.00  # Maximum amount
 
 fake = Faker()
 
 # Fallback for UserAgent
 try:
     ua = UserAgent()
-except Exception as e:
-    print("Using default user agent due to error:", e)
+except FakeUserAgentError:
+    print("Using default user agent due to error.")
     ua = UserAgent(fallback="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3")
 
 def get_opaque_data(card_number: str, exp_month: str, exp_year: str, card_cvv: str, proxy: dict):
@@ -104,7 +106,6 @@ def submit_payment(opaque_value: str, month: str, year: str, amount: str, proxy:
 
     response = requests.post(url, headers=headers, files={k: (None, v) for k, v in form_data.items()}, proxies=proxy, timeout=30)
     
-    # Return the raw response text for debugging
     return response.text
 
 @app.route('/submit_payment', methods=['GET'])
@@ -128,8 +129,17 @@ def api_submit_payment():
         return jsonify({"error": "Missing required parameters"}), 400
 
     try:
+        # Validate the amount
+        amount = float(amount)
+        if amount < MINIMUM_AMOUNT or amount > MAXIMUM_AMOUNT:
+            return jsonify({
+                "charged_amount": f"${DEFAULT_AMOUNT}",
+                "message": f"{amount} is out of limit. Please provide an amount between ${MINIMUM_AMOUNT} and ${MAXIMUM_AMOUNT}.",
+                "success": False
+            }), 400
+
         opaque = get_opaque_data(card, month, year, cvv, proxy)
-        raw_response = submit_payment(opaque, month, year, amount, proxy)
+        raw_response = submit_payment(opaque, month, year, f"{amount:.2f}", proxy)
 
         # Clean and parse the response
         response_data = json.loads(raw_response)
@@ -143,7 +153,7 @@ def api_submit_payment():
             message = error_details.replace("<div>", "").replace("</div>", "").strip() if error_details else "An error occurred."
 
         return jsonify({
-            "charged_amount": f"${amount}",
+            "charged_amount": f"${amount:.2f}",
             "message": message,
             "success": success
         }), 200
