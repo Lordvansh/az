@@ -11,8 +11,8 @@ app = Flask(__name__)
 MERCHANT_NAME = "3c5Q9QdJW"
 CLIENT_KEY = "2n7ph2Zb4HBkJkb8byLFm7stgbfd8k83mSPWLW23uF4g97rX5pRJNgbyAe2vAvQu"
 DEFAULT_AMOUNT = "0.10"
-MINIMUM_AMOUNT = 0.01  # Minimum amount
-MAXIMUM_AMOUNT = 100.00  # Maximum amount
+MINIMUM_AMOUNT = 0.01  # Minimum amount allowed
+MAXIMUM_AMOUNT = 100.00  # Maximum amount allowed
 
 fake = Faker()
 
