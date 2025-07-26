@@ -3,8 +3,14 @@ import json
 import uuid
 from flask import Flask, request, jsonify
 import requests
-from faker import Faker
-from fake_useragent import UserAgent
+from fake_useragent import UserAgent, FakeUserAgentError
+
+try:
+    ua = UserAgent(use_cache_server=False)
+    user_agent = ua.random
+except FakeUserAgentError:
+    # Fallback user-agent if fetching fails
+    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
 
 app = Flask(__name__)
 fake = Faker()
